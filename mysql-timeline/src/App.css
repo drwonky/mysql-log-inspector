@@ -36,3 +36,17 @@
     transform: rotate(360deg);
   }
 }
+
+:root {
+	--mast-size: 3rem;
+	--company-font-size: 2rem;
+	--user-font-size: 1.25rem;
+}
+
+.navbar {
+  height: var(--mast-size);
+}
+
+.main {
+  min-height: calc(100vh - var(--mast-size));
+}

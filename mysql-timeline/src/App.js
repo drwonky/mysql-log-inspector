@@ -1,8 +1,8 @@
 import React from 'react';
 import './App.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
-import { Container, Form, Button, Row, Col } from 'react-bootstrap';
-import { Folder, Play } from 'react-feather';
+import { Container, Form, Row, Col, Modal, Button, Navbar, Nav, NavDropdown } from 'react-bootstrap';
+import { Folder } from 'react-feather';
 
 const Context = React.createContext();
 
@@ -69,36 +69,35 @@ const loglevel_strings = {
   'Note': loglevel.INFORMATION_LEVEL
 }
 
-export default class MySQLTimeline extends React.Component {
-  constructor(props) {
-    super(props)
+const loglevel_colors = {
+  SYSTEM_LEVEL: 'var(--primary)',
+  ERROR_LEVEL: 'var(--danger)',
+  WARNING_LEVEL: 'var(--warning)',
+  INFORMATION_LEVEL: 'var(--secondary)',
+  FATAL: 'var(--orange)',
+}
 
-    this.state = {
-      action: 'upload',
-      logdata: null,
-    }
-  }
+function Dialog(props) {
+  //const [show, setShow] = useState(true);
 
-  setLogData(e) {
-    console.log('received logdata: ', e);
-    this.setState({ logdata: e });
-  }
+  //const handleClose = () => setShow(false);
+  const handleClose = () => props.done();
 
-  render() {
-    return (
-      <Context.Provider
-        value={{
-        }}>
-        {this.state.action === 'upload' &&
-          <Container>
-            <h3>Pick files to view</h3>
-            <Uploader onChange={this.setLogData.bind(this)} />
-          </Container>
-        }
-
-      </Context.Provider>
-    )
-  }
+  return (
+    <>
+      <Modal show={true} onHide={handleClose}>
+        <Modal.Header closeButton>
+          <Modal.Title>{props.title}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>{props.content}</Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={handleClose}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    </>
+  );
 }
 
 class Uploader extends React.Component {
@@ -151,8 +150,8 @@ class Uploader extends React.Component {
       let now = new Date(date.valueOf());
       if (ver !== '8') {
         now.setDate(parseInt(line[3]));
-        now.setFullYear(parseInt(line[1]) < 2000 ? 2000+parseInt(line[1]) : parseInt(line[1]));
-        now.setMonth(parseInt(line[2])-1);
+        now.setFullYear(parseInt(line[1]) < 2000 ? 2000 + parseInt(line[1]) : parseInt(line[1]));
+        now.setMonth(parseInt(line[2]) - 1);
         now.setHours(parseInt(line[4]), parseInt(line[5]), parseInt(line[6]));
       } else {
         now.setUTCHours(line[1], line[2], line[3]);
@@ -162,7 +161,7 @@ class Uploader extends React.Component {
         loglevel: loglevel.FATAL,
         subsystem: null,
         errcode: null,
-        msg: [ ver !== '8' ? line[7] : line[4] ],
+        msg: [ver !== '8' ? line[7] : line[4]],
       }
     } else return null;
   }
@@ -177,11 +176,26 @@ class Uploader extends React.Component {
     return goodcnt;
   }
 
+  initAndInc(logdata,key) {
+    if (key === undefined || key === null) return;
+    if (logdata[key] === undefined || logdata[key] === null)
+      logdata[key]=1;
+    else
+      logdata[key]++;
+  }
+
   pushEntry(result, last_log_entry, logdata) {
     if (last_log_entry) {
       logdata.oldest_date = last_log_entry.date < logdata.oldest_date ? last_log_entry.date : logdata.oldest_date;
       logdata.newest_date = last_log_entry.date > logdata.newest_date ? last_log_entry.date : logdata.newest_date;
+      this.initAndInc(logdata.count_by_loglevel,last_log_entry.loglevel);
+      this.initAndInc(logdata.count_by_errcode, last_log_entry.errcode);
+      this.initAndInc(logdata.count_by_subsystem, last_log_entry.subsystem);
       result.push(last_log_entry);
+      if (logdata.entries_by_loglevel[last_log_entry.loglevel] === undefined) logdata.entries_by_loglevel[last_log_entry.loglevel] = [];
+      logdata.entries_by_loglevel[last_log_entry.loglevel].push(last_log_entry);
+      if (logdata.entries_by_date[last_log_entry.date] === undefined) logdata.entries_by_date[last_log_entry.date] = [];
+      logdata.entries_by_date[last_log_entry.date].push(last_log_entry);
     }
   }
 
@@ -216,7 +230,13 @@ class Uploader extends React.Component {
       oldest_date: Date.now(),
       newest_date: null,
       version: null,
-      content: null,
+      entries: null,
+      entries_by_loglevel: [],
+      entries_by_date: {},
+      count: 0,
+      count_by_loglevel: {},
+      count_by_errcode: {},
+      count_by_subsystem: {},
     };
 
     for (const ver of versions) {
@@ -241,7 +261,7 @@ class Uploader extends React.Component {
     let last_log_entry = null;
     let log_entry = null;
 
-    logdata.content = lines.reduce((result, entry) => {
+    logdata.entries = lines.reduce((result, entry) => {
       let magicmatch = entry.match(magicwords);
       let line = entry.match(regex);
 
@@ -278,7 +298,7 @@ class Uploader extends React.Component {
 
           recovery = false;
 
-        } 
+        }
 
         // push last iteration's entry
         this.pushEntry(result, last_log_entry, logdata);
@@ -287,8 +307,6 @@ class Uploader extends React.Component {
         last_log_entry = log_entry;
 
       } else { // log entry didn't match
-        nullcnt++;
-
 
         if (magicmatch && recovery === false) { // we saw an assertion or signal, start recovery
 
@@ -302,12 +320,14 @@ class Uploader extends React.Component {
 
         } else {
 
-          // we are doing recovery, push message onto recovered log entry
-          if (last_log_entry) last_log_entry.msg.push(entry);
-
+          // we are accumulating hanging lines and recovered lines
+          if (last_log_entry && entry !== "") {
+            last_log_entry.msg.push(entry);
+          } else {
+            nullcnt++;
+            badlines.push(entry);
+          }
         }
-
-        badlines.push(entry);
       }
 
       progress.value = Math.round((cnt * 100) / lines.length);
@@ -316,11 +336,12 @@ class Uploader extends React.Component {
     }, []);
 
     // take care of last entry at end of file
-    if (last_log_entry) logdata.content.push(last_log_entry);
+    if (last_log_entry) this.pushEntry(logdata.entries, last_log_entry, logdata);
 
-    console.log('Processed ', lines.length, ' lines,', notnullcnt, ' success ', nullcnt, ' failed');
+    console.log('Processed ', lines.length, ' lines,', notnullcnt, ' success ', nullcnt, ' bad',badlines);
     //console.log(badlines);
     //console.log(logdata);
+    logdata.count = notnullcnt;
 
     return logdata;
   }
@@ -380,7 +401,7 @@ class Uploader extends React.Component {
   render() {
     return (
       <>
-        <div className="d-flex flex-column align-items-start py-4">
+        <div className="d-flex flex-column align-items-start">
           <label className="btn btn-outline-secondary">
             <Folder />Browse <Form.File className="my-3 d-none" onChange={(e) => { this.handleFileChange(e) }} type="file" id="file" multiple></Form.File>
           </label>
@@ -401,15 +422,99 @@ class Uploader extends React.Component {
               }
             </div>
           }
-          {/*
-          <Button className="my-3" variant="primary" disabled={this.state.selected === null} onClick={() => { }}>
-            <Play />View
-          </Button>*/}
           {this.state.error &&
             <p>Error: {this.state.error}</p>
           }
         </div>
       </>
+    )
+  }
+}
+
+class Timeline extends React.Component {
+  constructor(props) {
+    super(props);
+
+    this.canvas = React.createRef();
+    this.drawContents = this.drawContents.bind(this);
+  }
+
+  componentDidMount() {
+    window.addEventListener('resize', this.drawContents, false);
+
+    this.drawContents();
+  }
+
+  drawContents() {
+    const ctx = this.canvas.current.getContext('2d')
+
+    ctx.canvas.width = window.innerWidth;
+
+    ctx.fillStyle = 'var(--dark)';
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+    ctx.fillStyle = 'rgb(200, 0, 0)';
+    ctx.fillRect(10, 10, 50, 50);
+
+    ctx.fillStyle = 'rgba(0, 0, 200, 0.5)';
+    ctx.fillRect(30, 30, 50, 50);
+  }
+
+  render() {
+    return (
+      <canvas className="align-self-end p-0 m-0" height="150" ref={this.canvas}></canvas>
+    )
+  }
+}
+
+export default class MySQLTimeline extends React.Component {
+  constructor(props) {
+    super(props)
+
+    this.state = {
+      action: null,
+      logdata: null,
+    }
+  }
+
+  setLogData(e) {
+    console.log('received logdata: ', e);
+    this.setState({ logdata: e });
+  }
+
+  render() {
+    return (
+      <Context.Provider
+        value={{
+        }}>
+        <Navbar bg="dark" variant="dark">
+          <Navbar.Brand href="#home">
+            <img
+              alt="MySQL Dolphin"
+              src="/mysql-6.svg"
+              width="30"
+              height="30"
+              className="d-inline-block align-top"
+            />{' '}
+            MySQL Log Visualizer
+            </Navbar.Brand>
+          <Nav className="mr-auto">
+            <NavDropdown title="Actions" id="basic-nav-dropdown">
+              <NavDropdown.Item href="#upload" onClick={() => { this.setState({ action: 'upload' }) }}>Load Logs</NavDropdown.Item>
+              <NavDropdown.Divider />
+              <NavDropdown.Item href="#action/3.4">Separated link</NavDropdown.Item>
+            </NavDropdown>
+          </Nav>
+        </Navbar>
+        <Container fluid className="d-flex justify-content-between p-0 main">
+          {this.state.action === 'upload' &&
+            <Dialog title="Pick files to view" done={() => this.setState({ action: 'loaded' })} content={<Uploader onChange={this.setLogData.bind(this)} />} />
+          }
+          {this.state.action === 'loaded' && this.state.logdata !== null &&
+            <Timeline data={this.state.logdata} />
+          }
+        </Container>
+      </Context.Provider>
     )
   }
 }
