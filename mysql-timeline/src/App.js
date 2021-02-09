@@ -3,6 +3,9 @@ import './App.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import { Container, Form, Row, Col, Modal, Button, Navbar, Nav, NavDropdown } from 'react-bootstrap';
 import { Folder } from 'react-feather';
+import { classifiers } from './classifiers';
+import { postProcessors } from './postProcessors';
+import { aggregators } from './aggregators';
 
 const Context = React.createContext();
 
@@ -78,9 +81,6 @@ const loglevel_colors = {
 }
 
 function Dialog(props) {
-  //const [show, setShow] = useState(true);
-
-  //const handleClose = () => setShow(false);
   const handleClose = () => props.done();
 
   return (
@@ -100,14 +100,19 @@ function Dialog(props) {
   );
 }
 
-class Uploader extends React.Component {
+class LogLoader extends React.Component {
   constructor(props) {
     super(props);
+
     this.state = {
       error: null,
       selected: null,
       logdata: null,
     }
+
+    this.default_classifiers = classifiers;
+    this.default_postProcessors = postProcessors;
+    this.default_aggregators = aggregators;
   }
 
   static contextType = Context;
@@ -176,26 +181,40 @@ class Uploader extends React.Component {
     return goodcnt;
   }
 
-  initAndInc(logdata,key) {
-    if (key === undefined || key === null) return;
-    if (logdata[key] === undefined || logdata[key] === null)
-      logdata[key]=1;
-    else
-      logdata[key]++;
+  runClassifiers(logdata, last_log_entry) {
+
+    for (const func of this.default_classifiers.functions)
+      func(logdata, last_log_entry);
+
+    if (this.props.classifiers !== undefined)
+      for (const func of this.props.classifiers.functions)
+        func(logdata, last_log_entry);
+
+  }
+
+  runPostProcessors(logdata) {
+    for (const func of this.default_postProcessors.functions)
+      func(logdata);
+
+    if (this.props.postProcessors !== undefined)
+      for (const func of this.props.postProcessors.functions)
+        func(logdata);
+  }
+
+  runAggregators(output, logdata) {
+    for (const func of this.default_aggregators.functions)
+      func(output, logdata);
+
+    if (this.props.aggregators !== undefined)
+      for (const func of this.props.aggregators.functions)
+        func(output, logdata);
   }
 
   pushEntry(result, last_log_entry, logdata) {
     if (last_log_entry) {
-      logdata.oldest_date = last_log_entry.date < logdata.oldest_date ? last_log_entry.date : logdata.oldest_date;
-      logdata.newest_date = last_log_entry.date > logdata.newest_date ? last_log_entry.date : logdata.newest_date;
-      this.initAndInc(logdata.count_by_loglevel,last_log_entry.loglevel);
-      this.initAndInc(logdata.count_by_errcode, last_log_entry.errcode);
-      this.initAndInc(logdata.count_by_subsystem, last_log_entry.subsystem);
       result.push(last_log_entry);
-      if (logdata.entries_by_loglevel[last_log_entry.loglevel] === undefined) logdata.entries_by_loglevel[last_log_entry.loglevel] = [];
-      logdata.entries_by_loglevel[last_log_entry.loglevel].push(last_log_entry);
-      if (logdata.entries_by_date[last_log_entry.date] === undefined) logdata.entries_by_date[last_log_entry.date] = [];
-      logdata.entries_by_date[last_log_entry.date].push(last_log_entry);
+
+      this.runClassifiers(logdata, last_log_entry);
     }
   }
 
@@ -226,17 +245,14 @@ class Uploader extends React.Component {
 
     let max_good_cnt = 0;
     let regex = null;
+
+    // Deep copies are required because otherwise the consts are overwritten!
     let logdata = {
-      oldest_date: Date.now(),
-      newest_date: null,
       version: null,
       entries: null,
-      entries_by_loglevel: [],
-      entries_by_date: {},
       count: 0,
-      count_by_loglevel: {},
-      count_by_errcode: {},
-      count_by_subsystem: {},
+      ...JSON.parse(JSON.stringify(classifiers.initializers)),
+      ...JSON.parse(JSON.stringify(postProcessors.initializers)),
     };
 
     for (const ver of versions) {
@@ -249,7 +265,10 @@ class Uploader extends React.Component {
     }
 
     // Not recognized as any MySQL log file
-    if (max_good_cnt === 0) return null;
+    if (max_good_cnt === 0) {
+      console.warn('Did not recognize file as MySQL log');
+      return null;
+    }
 
     console.log('Version ', logdata.version, ' won with ', max_good_cnt, ' lines');
 
@@ -338,30 +357,45 @@ class Uploader extends React.Component {
     // take care of last entry at end of file
     if (last_log_entry) this.pushEntry(logdata.entries, last_log_entry, logdata);
 
-    console.log('Processed ', lines.length, ' lines,', notnullcnt, ' success ', nullcnt, ' bad',badlines);
+    console.log('Processed ', lines.length, ' lines,', notnullcnt, ' success ', nullcnt, ' bad', badlines);
     //console.log(badlines);
     //console.log(logdata);
     logdata.count = notnullcnt;
+
+    this.runPostProcessors(logdata);
 
     return logdata;
   }
 
   async processLogs(e) {
     return new Promise((resolve) => {
-      let logdata = [];
+
+      // Deep copies are required because otherwise the consts are overwritten!
+      let output = {
+        logdata: [],
+        aggregated: {
+          ...JSON.parse(JSON.stringify(this.default_aggregators.initializers))
+        }
+      }
+
+      // The file list is not an array
       for (let entry = 0; entry < e.target.files.length; entry++) {
         let file = e.target.files[entry];
         file.text()
           .then(content => {
             let progress = document.getElementById('progress' + entry);
             let processed = this.processLogLines(content, progress);
-            logdata.push({
+            output.logdata.push({
               content: processed,
               file: file,
             });
+            if (output.logdata.length === e.target.files.length) {
+              //console.log(output.logdata.length, output.logdata);
+              this.runAggregators(output.aggregated, output.logdata);
+              resolve(output);
+            }
           })
       }
-      resolve(logdata);
     })
   }
 
@@ -377,8 +411,11 @@ class Uploader extends React.Component {
     this.setState({ selected: filelist }, () => {
       this.processLogs(e)
         .then(logdata => {
-          console.log('resolved logdata', logdata)
+          //console.log('resolved logdata', logdata)
           this.props.onChange(logdata);
+
+          // reset state and get rid of accumulated data, otherwise it will persist
+          this.setState({ logdata: null });
         });
     });
   }
@@ -508,7 +545,7 @@ export default class MySQLTimeline extends React.Component {
         </Navbar>
         <Container fluid className="d-flex justify-content-between p-0 main">
           {this.state.action === 'upload' &&
-            <Dialog title="Pick files to view" done={() => this.setState({ action: 'loaded' })} content={<Uploader onChange={this.setLogData.bind(this)} />} />
+            <Dialog title="Pick files to view" done={() => this.setState({ action: 'loaded' })} content={<LogLoader onChange={this.setLogData.bind(this)} />} />
           }
           {this.state.action === 'loaded' && this.state.logdata !== null &&
             <Timeline data={this.state.logdata} />
