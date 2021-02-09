@@ -113,11 +113,16 @@ class LogLoader extends React.Component {
     this.default_classifiers = classifiers;
     this.default_postProcessors = postProcessors;
     this.default_aggregators = aggregators;
+
+    this.fileRef = React.createRef();
   }
 
   static contextType = Context;
 
   componentDidMount() {
+
+    // Display file picker immediately
+    this.fileRef.current.click();
   }
 
   componentDidUpdate(prevProps, prevState) {
@@ -434,14 +439,11 @@ class LogLoader extends React.Component {
     } else return (this.fix(size / 1024 / 1024 / 1024) + ' GB')
   }
 
-
   render() {
     return (
       <>
         <div className="d-flex flex-column align-items-start">
-          <label className="btn btn-outline-secondary">
-            <Folder />Browse <Form.File className="my-3 d-none" onChange={(e) => { this.handleFileChange(e) }} type="file" id="file" multiple></Form.File>
-          </label>
+          <Form.File className="my-3 d-none" ref={this.fileRef} onChange={(e) => { this.handleFileChange(e) }} type="file" id="file" multiple></Form.File>
           {this.state.selected !== null && this.state.selected.length > 0 &&
             <div className="container d-flex flex-column">
               <p>{this.state.selected.length} file{this.state.selected.length > 1 ? 's' : ''} selected</p>
@@ -545,7 +547,7 @@ export default class MySQLTimeline extends React.Component {
         </Navbar>
         <Container fluid className="d-flex justify-content-between p-0 main">
           {this.state.action === 'upload' &&
-            <Dialog title="Pick files to view" done={() => this.setState({ action: 'loaded' })} content={<LogLoader onChange={this.setLogData.bind(this)} />} />
+            <Dialog title="Log Selector" done={() => this.setState({ action: 'loaded' })} content={<LogLoader onChange={this.setLogData.bind(this)} />} />
           }
           {this.state.action === 'loaded' && this.state.logdata !== null &&
             <Timeline data={this.state.logdata} />
