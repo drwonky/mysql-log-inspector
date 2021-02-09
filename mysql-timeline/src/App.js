@@ -485,6 +485,8 @@ class Timeline extends React.Component {
   }
 
   drawContents() {
+    if (this.canvas.current === null) return;
+
     const ctx = this.canvas.current.getContext('2d')
 
     ctx.canvas.width = window.innerWidth;
